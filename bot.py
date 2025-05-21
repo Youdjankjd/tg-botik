@@ -10,7 +10,7 @@ import os
 logging.basicConfig(level=logging.INFO)
 
 # Токен бота
-TOKEN = os.getenv("BOT_TOKEN") or "ВСТАВЬ_ТУТ_СВОЙ_ТОКЕН"
+TOKEN = os.getenv("7776073776:AAFTWIurr_tR6cxIx4GZ4iihD7rnpJ2gOyQ") or "7776073776:AAFTWIurr_tR6cxIx4GZ4iihD7rnpJ2gOyQ"
 
 # Создаем бота и диспетчер
 bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
