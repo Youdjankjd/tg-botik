@@ -10,7 +10,7 @@ from aiogram.filters import Command
 from fastapi import FastAPI, Request
 
 # === Конфигурация ===
-BOT_TOKEN = os.getenv("BOT_TOKEN", "7776073776:AAFFQl...")  # Лучше хранить в .env или на Render
+BOT_TOKEN = os.getenv("BOT_TOKEN", "7776073776:AAFTWIurr_tR6cxIx4GZ4iihD7rnpJ2gOyQ")  # Лучше хранить в .env или на Render
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://tg-botik.onrender.com")  # Render URL
 ADMIN_IDS = [6505085514]  # Замени на свой Telegram ID
 
