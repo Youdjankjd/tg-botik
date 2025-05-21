@@ -1,6 +1,7 @@
 aiogram
 aiosqlite
 fastapi
-python-dotenv
+uvicorn
+
 
 
