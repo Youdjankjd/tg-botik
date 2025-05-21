@@ -1,7 +1,1 @@
-aiogram
-aiosqlite
-fastapi
-uvicorn
-
-
-
+aiogram==3.20.0
