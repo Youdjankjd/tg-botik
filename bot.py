@@ -1,153 +1,58 @@
-
 import asyncio
 import logging
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.filters import Command
+import os
 import random
 import aiosqlite
 
-TOKEN = "7776073776:AAFFQldws5uyyMYG3ORAVanaazy41D5SZPE"
-ADMIN_IDS = [6505085514]  # Замените на свой Telegram ID
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.filters import Command
+from fastapi import FastAPI, Request
 
-bot = Bot(token=TOKEN)
+# === Конфигурация ===
+BOT_TOKEN = os.getenv("BOT_TOKEN", "7776073776:AAFFQl...")  # Лучше хранить в .env или на Render
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://tg-botik.onrender.com")  # Render URL
+ADMIN_IDS = [6505085514]  # Замени на свой Telegram ID
+
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# База данных
-DB_NAME = "bot.db"
-
-async def init_db():
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            balance INTEGER DEFAULT 1000,
-            inventory TEXT DEFAULT ''
-        )
-        """)
-        await db.commit()
-
-# Команда /start
+# === Обработка команд ===
 @dp.message(Command("start"))
-async def start(message: Message):
-    await add_user(message.from_user.id)
-    await message.answer("👋 Добро пожаловать в Эконом Бот! Тут можно крутить рулетку, собирать предметы и многое другое. Напиши /menu")
+async def start_handler(message: Message):
+    await message.answer("🎉 Добро пожаловать в нашего телеграм-бота казино!")
 
-# Главное меню
-@dp.message(Command("menu"))
-async def menu(message: Message):
-    kb = [
-        [types.KeyboardButton(text="🎰 Казино")],
-        [types.KeyboardButton(text="🎒 Инвентарь")]
-    ]
-    await message.answer("📋 Меню:", reply_markup=types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True))
+# Пример рулетки (будет расширено)
+@dp.message(Command("roulette"))
+async def roulette(message: Message):
+    result = random.choice(["🔴 Красное", "⚫ Чёрное", "🟢 Зеро"])
+    await message.answer(f"🎰 Выпало: {result}")
 
-# Казино рулетка
-@dp.message(F.text == "🎰 Казино")
-async def casino(message: Message):
-    uid = message.from_user.id
-    balance = await get_balance(uid)
-    if balance < 100:
-        return await message.answer("💸 У тебя не хватает 100 монет для ставки!")
-
-    await update_balance(uid, -100)
-    outcome = random.choices(["Выигрыш", "Ничья", "Проигрыш"], [0.2, 0.3, 0.5])[0]
-
-    if outcome == "Выигрыш":
-        await update_balance(uid, 300)
-        await message.answer("🎉 Ты выиграл 300 монет!")
-    elif outcome == "Ничья":
-        await update_balance(uid, 100)
-        await message.answer("😐 Ничья. Ставка возвращена.")
-    else:
-        await message.answer("😵 Ты проиграл 100 монет. Попробуй ещё раз!")
-
-# Инвентарь
-@dp.message(F.text == "🎒 Инвентарь")
-async def inventory(message: Message):
-    uid = message.from_user.id
-    inv = await get_inventory(uid)
-    text = "📦 Твой инвентарь пуст." if not inv else f"🎁 Предметы: {inv}"
-    await message.answer(text)
-
-# Админка
+# Пример админки
 @dp.message(Command("admin"))
 async def admin_panel(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return await message.answer("⛔ Нет доступа.")
+    if message.from_user.id in ADMIN_IDS:
+        await message.answer("🛠 Админ-панель:\n- /stats — статистика\n- /broadcast — рассылка")
+    else:
+        await message.answer("⛔ У вас нет доступа.")
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 Выдать монеты", callback_data="give_money")],
-        [InlineKeyboardButton(text="🎁 Выдать предмет", callback_data="give_item")]
-    ])
-    await message.answer("🛠 Админ-панель:", reply_markup=kb)
+# === Webhook (для Render) ===
+app = FastAPI()
 
-# Обработка инлайн-кнопок
-@dp.callback_query()
-async def admin_buttons(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        return await callback.answer("Нет доступа", show_alert=True)
+@app.on_event("startup")
+async def on_startup():
+    await bot.delete_webhook()
+    await bot.set_webhook(f"{WEBHOOK_URL}/webhook")
 
-    if callback.data == "give_money":
-        await callback.message.answer("Введите ID пользователя и сумму через пробел.")
-    elif callback.data == "give_item":
-        await callback.message.answer("Введите ID пользователя и название предмета через пробел.")
-    await callback.answer()
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    update = types.Update(**await request.json())
+    await dp._process_update(update)
+    return {"ok": True}
 
-# Админ команды (выдача денег и предметов)
-@dp.message(F.text.regexp(r"^\d+\s+\w+"))
-async def admin_give(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    try:
-        uid, value = message.text.strip().split()
-        uid = int(uid)
-        if value.isdigit():
-            await update_balance(uid, int(value))
-            await message.answer(f"💸 Пользователю {uid} выдано {value} монет.")
-        else:
-            await add_item(uid, value)
-            await message.answer(f"🎁 Пользователю {uid} выдан предмет: {value}.")
-    except:
-        await message.answer("⚠ Ошибка обработки команды.")
-
-# === БД функции ===
-async def add_user(user_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("INSERT OR IGNORE INTO users(user_id) VALUES (?)", (user_id,))
-        await db.commit()
-
-async def get_balance(user_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row else 0
-
-async def update_balance(user_id, amount):
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-        await db.commit()
-
-async def get_inventory(user_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT inventory FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row else ""
-
-async def add_item(user_id, item):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT inventory FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            inv = row[0] if row else ""
-        new_inv = inv + ", " + item if inv else item
-        await db.execute("UPDATE users SET inventory = ? WHERE user_id = ?", (new_inv, user_id))
-        await db.commit()
-
-# Запуск
-async def main():
-    await init_db()
-    await dp.start_polling(bot)
-
+# === Локальный запуск (например, для тестов) ===
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())
+    import uvicorn
+    asyncio.run(bot.delete_webhook())
+    uvicorn.run("bot:app", host="0.0.0.0", port=8000)
+
