@@ -1,2 +1,5 @@
-aiogram==3.20.0.post0
-aiosqlite
+aiohttp
+aiogram
+fastapi
+uvicorn
+python-dotenv
