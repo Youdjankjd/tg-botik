@@ -10,9 +10,9 @@ from aiogram.utils.markdown import hbold
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.methods import GetChatMember
 
-TOKEN = "7558760680:AAHhhuACxlLgfkOwskeA5B9dzZ4GZp2uk8c"
+TOKEN = "ВАШ_ТОКЕН"
 CHANNEL_ID = "@economicbotlive"
-ADMIN_IDS = [6505085514] 
+ADMIN_USERNAMES = ["adminusername1", "adminusername2"]  # замените на ваши Telegram usernames
 
 bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML, session=AiohttpSession())
 dp = Dispatcher()
@@ -26,9 +26,11 @@ cursor = conn.cursor()
 
 cursor.execute("""CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
+    username TEXT,
     balance INTEGER DEFAULT 0,
     referrer INTEGER,
-    referrals INTEGER DEFAULT 0
+    referrals INTEGER DEFAULT 0,
+    vip INTEGER DEFAULT 0
 )""")
 
 cursor.execute("""CREATE TABLE IF NOT EXISTS items (
@@ -58,6 +60,40 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS jobs (
 
 conn.commit()
 
+# Инициализация предметов и работ
+def initialize_items_and_jobs():
+    cursor.execute("SELECT COUNT(*) FROM items")
+    if cursor.fetchone()[0] == 0:
+        for i in range(30):
+            name = f"Предмет {i+1}"
+            price = (i+1)*100
+            income = (i+1)*10
+            cursor.execute("INSERT INTO items (name, price, income) VALUES (?, ?, ?)", (name, price, income))
+    cursor.execute("SELECT COUNT(*) FROM jobs")
+    if cursor.fetchone()[0] == 0:
+        job_list = [
+            ("Курьер", 50),
+            ("Продавец", 60),
+            ("Официант", 70),
+            ("Кассир", 80),
+            ("Грузчик", 90),
+            ("Повар", 100),
+            ("Бармен", 110),
+            ("Программист", 120),
+            ("Дизайнер", 130),
+            ("Инженер", 140),
+            ("Водитель", 150),
+            ("Таксист", 160),
+            ("Адвокат", 170),
+            ("Врач", 180),
+            ("Пилот", 200)
+        ]
+        for name, reward in job_list:
+            cursor.execute("INSERT INTO jobs (name, reward) VALUES (?, ?)", (name, reward))
+    conn.commit()
+
+initialize_items_and_jobs()
+
 # Клавиатура
 def main_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -69,9 +105,16 @@ def main_keyboard():
         [InlineKeyboardButton(text="🎒 Инвентарь", callback_data="inventory")]
     ])
 
+def admin_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Рассылка", callback_data="broadcast")],
+        [InlineKeyboardButton(text="🛠 Памятка", callback_data="admin_help")]
+    ])
+
 @dp.message(CommandStart())
 async def start(message: Message):
     user_id = message.from_user.id
+    username = message.from_user.username
     ref = message.text.split(" ")[1] if len(message.text.split()) > 1 else None
 
     chat_member = await bot(GetChatMember(chat_id=CHANNEL_ID, user_id=user_id))
@@ -80,8 +123,8 @@ async def start(message: Message):
 
     cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
     if not cursor.fetchone():
-        cursor.execute("INSERT INTO users (user_id, balance, referrer) VALUES (?, ?, ?)",
-                       (user_id, 100, int(ref) if ref and ref.isdigit() else None))
+        cursor.execute("INSERT INTO users (user_id, username, balance, referrer) VALUES (?, ?, ?, ?)",
+                       (user_id, username, 100, int(ref) if ref and ref.isdigit() else None))
         if ref and ref.isdigit():
             cursor.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id = ?", (int(ref),))
         conn.commit()
@@ -90,9 +133,10 @@ async def start(message: Message):
 
 @dp.callback_query(F.data == "profile")
 async def profile(callback: CallbackQuery):
-    cursor.execute("SELECT balance, referrals FROM users WHERE user_id = ?", (callback.from_user.id,))
-    bal, refs = cursor.fetchone()
-    await callback.message.edit_text(f"👤 Ваш профиль\n💰 Баланс: {bal}\n👥 Рефералы: {refs}", reply_markup=main_keyboard())
+    cursor.execute("SELECT balance, referrals, vip FROM users WHERE user_id = ?", (callback.from_user.id,))
+    bal, refs, vip = cursor.fetchone()
+    vip_status = "✅" if vip else "❌"
+    await callback.message.edit_text(f"👤 Ваш профиль\n💰 Баланс: {bal}\n👥 Рефералы: {refs}\n💎 VIP: {vip_status}", reply_markup=main_keyboard())
 
 @dp.callback_query(F.data == "top")
 async def top(callback: CallbackQuery):
@@ -186,64 +230,8 @@ async def show_jobs(callback: CallbackQuery):
 
 @dp.message(F.text.regexp(r"^\d+$"))
 async def do_job(message: Message):
-    job_id = int(message.text)
-    user_id = message.from_user.id
-
-    cursor.execute("SELECT name, reward FROM jobs WHERE id = ?", (job_id,))
-    job = cursor.fetchone()
-    if not job:
-        return await message.answer("❌ Работа не найдена.")
-
-    name, reward = job
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (reward, user_id))
-    conn.commit()
-
-    await message.answer(f"✅ Вы выполнили {name} и получили {reward} монет.")
-
-@dp.callback_query(F.data == "promo")
-async def promo_start(callback: CallbackQuery):
-    await callback.message.edit_text("🎁 Введите промокод:")
-
-@dp.message()
-async def promo_check(message: Message):
-    code = message.text.strip()
-    user_id = message.from_user.id
-
-    cursor.execute("SELECT reward FROM promo WHERE code = ?", (code,))
-    result = cursor.fetchone()
-    if not result:
-        return
-
-    reward = result[0]
-    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (reward, user_id))
-    cursor.execute("DELETE FROM promo WHERE code = ?", (code,))
-    conn.commit()
-    await message.answer(f"✅ Промокод активирован! Вы получили {reward} монет.")
-
-# Фоновая задача — начисление пассивного дохода
-async def passive_income():
-    while True:
-        cursor.execute("""
-            SELECT user_id, SUM(items.income * inventory.count)
-            FROM inventory
-            JOIN items ON inventory.item_id = items.id
-            GROUP BY user_id
-        """)
-        income_data = cursor.fetchall()
-
-        for user_id, total_income in income_data:
-            if total_income:
-                cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (total_income, user_id))
-
-        conn.commit()
-        await asyncio.sleep(3600)
-
-async def main():
-    asyncio.create_task(passive_income())
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    job_id =
+::contentReference[oaicite:31]{index=31}
 
 
 
