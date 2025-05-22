@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.utils import executor
 
-TOKEN = "YOUR_BOT_TOKEN"
+TOKEN = "7558760680:AAHhhuACxlLgfkOwskeA5B9dzZ4GZp2uk8c"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
