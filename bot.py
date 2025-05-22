@@ -3,32 +3,39 @@ import random
 import time
 import aiosqlite
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.filters import Command
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
+                           ReplyKeyboardMarkup, KeyboardButton, InputMediaPhoto)
+from aiogram.utils.markdown import hlink
 from aiogram.enums import ParseMode
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram import F
-from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramBadRequest
+import logging
 
 TOKEN = "7558760680:AAHhhuACxlLgfkOwskeA5B9dzZ4GZp2uk8c"
 ADMIN_IDS = [6505085514]
-CHANNEL_ID = -1002123456789  # заменим позже на реальный ID канала, можно узнать через @userinfobot
-
-bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher(storage=MemoryStorage())
-
+CHANNEL_USERNAME = "@economicbotlive"
 DB_NAME = "bot.db"
+
+bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
+dp = Dispatcher()
 
 # --- Кнопки ---
 main_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="🎰 Казино"), KeyboardButton(text="💸 Рулетка")],
-        [KeyboardButton(text="🛒 Магазин"), KeyboardButton(text="💼 Работа"), KeyboardButton(text="📦 Инвентарь")],
-        [KeyboardButton(text="👑 ТОП"), KeyboardButton(text="👥 Рефералы")]
+        [KeyboardButton(text="\U0001F4B0 Баланс"), KeyboardButton(text="\U0001F3B0 Казино")],
+        [KeyboardButton(text="\U0001F4B8 Рулетка"), KeyboardButton(text="\U0001F6D2 Магазин")],
+        [KeyboardButton(text="\U0001F4BC Работа"), KeyboardButton(text="\U0001F4E6 Инвентарь")],
+        [KeyboardButton(text="\U0001F451 ТОП"), KeyboardButton(text="\U0001F465 Рефералы")]
     ],
     resize_keyboard=True
 )
+
+# --- Проверка подписки ---
+async def check_subscription(user_id):
+    try:
+        member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except TelegramBadRequest:
+        return False
 
 # --- Инициализация БД ---
 async def init_db():
@@ -54,31 +61,31 @@ async def init_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS promocodes (
                 code TEXT PRIMARY KEY,
-                amount INTEGER
+                reward INTEGER
             )
         """)
         await db.commit()
 
-# --- Подписка ---
-async def check_subscription(user_id):
-    try:
-        member = await bot.get_chat_member(chat_id="@economicbotlive", user_id=user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except:
-        return False
-
 # --- Команды ---
-@dp.message(Command("start"))
+@dp.message(commands=["start"])
 async def start_cmd(msg: types.Message):
     user_id = msg.from_user.id
     if not await check_subscription(user_id):
-        await msg.answer("Пожалуйста, подпишитесь на канал: https://t.me/economicbotlive")
+        sub_markup = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="✅ Подписаться", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]]
+        )
+        await msg.answer_photo(
+            photo="https://i.imgur.com/EeG2VGE.png",
+            caption="<b>Для начала игры подпишитесь на наш канал!</b>",
+            reply_markup=sub_markup
+        )
         return
+
     async with aiosqlite.connect(DB_NAME) as db:
-        cur = await db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-        user = await cur.fetchone()
-        if not user:
-            ref = msg.text.split(" ")[-1] if " " in msg.text else None
+        user = await db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        result = await user.fetchone()
+        if not result:
+            ref = msg.text.split(" ")[-1] if len(msg.text.split()) > 1 else None
             ref_id = int(ref) if ref and ref.isdigit() else None
             await db.execute("INSERT INTO users (user_id, referrer) VALUES (?, ?)", (user_id, ref_id))
             if ref_id:
@@ -86,7 +93,36 @@ async def start_cmd(msg: types.Message):
             await db.commit()
     await msg.answer("Добро пожаловать в экономическую игру!", reply_markup=main_kb)
 
-@dp.message(F.text == "💰 Баланс")
+@dp.message(commands=["createpromo"])
+async def create_promo(msg: types.Message):
+    if msg.from_user.id not in ADMIN_IDS:
+        return
+    args = msg.text.split()
+    if len(args) != 3:
+        await msg.answer("Использование: /createpromo код сумма")
+        return
+    code, reward = args[1], int(args[2])
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("INSERT OR REPLACE INTO promocodes (code, reward) VALUES (?, ?)", (code, reward))
+        await db.commit()
+    await msg.answer(f"Промокод {code} на {reward} монет создан.")
+
+@dp.message_handler(lambda m: m.text.lower().startswith("промокод "))
+async def redeem_promo(msg: types.Message):
+    code = msg.text.split(" ", 1)[1].strip()
+    user_id = msg.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        cur = await db.execute("SELECT reward FROM promocodes WHERE code = ?", (code,))
+        promo = await cur.fetchone()
+        if promo:
+            await db.execute("DELETE FROM promocodes WHERE code = ?", (code,))
+            await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (promo[0], user_id))
+            await db.commit()
+            await msg.answer(f"Вы успешно активировали промокод и получили {promo[0]} монет!")
+        else:
+            await msg.answer("Неверный или уже использованный промокод.")
+
+@dp.message_handler(lambda m: m.text == "\U0001F4B0 Баланс")
 async def balance(msg: types.Message):
     user_id = msg.from_user.id
     async with aiosqlite.connect(DB_NAME) as db:
@@ -94,12 +130,14 @@ async def balance(msg: types.Message):
         user = await cur.fetchone()
         if user:
             bal, vip, mod = user
-            status = "Модератор" if mod else ("VIP" if vip else "Обычный")
+            status = "VIP" if vip else "Обычный"
+            if mod:
+                status = "Модератор"
             await msg.answer(f"Ваш баланс: {bal} монет\nСтатус: {status}")
         else:
             await msg.answer("Вы не зарегистрированы. Напишите /start")
 
-@dp.message(F.text == "💸 Рулетка")
+@dp.message_handler(lambda m: m.text == "\U0001F4B8 Рулетка")
 async def roulette(msg: types.Message):
     user_id = msg.from_user.id
     now = int(time.time())
@@ -110,14 +148,16 @@ async def roulette(msg: types.Message):
             last = user[0]
             if now - last < 86400:
                 remain = 86400 - (now - last)
-                await msg.answer(f"Вы уже получали рулетку. Подождите {remain // 3600} ч. {(remain % 3600) // 60} мин.")
+                hours = remain // 3600
+                minutes = (remain % 3600) // 60
+                await msg.answer(f"Вы уже получали рулетку. Подождите {hours} ч. {minutes} мин.")
                 return
-            amount = random.choices([0, 500, 1000, 2500, 5000], weights=[50, 25, 15, 8, 2])[0]
+            amount = random.choices([0, 250, 500, 1000, 2500], weights=[50, 25, 15, 8, 2])[0]
             await db.execute("UPDATE users SET balance = balance + ?, last_daily = ? WHERE user_id = ?", (amount, now, user_id))
             await db.commit()
             await msg.answer(f"Вы выиграли {amount} монет в рулетке!")
 
-@dp.message(F.text == "🎰 Казино")
+@dp.message_handler(lambda m: m.text == "\U0001F3B0 Казино")
 async def casino(msg: types.Message):
     user_id = msg.from_user.id
     async with aiosqlite.connect(DB_NAME) as db:
@@ -125,46 +165,13 @@ async def casino(msg: types.Message):
         user = await cur.fetchone()
         if user and user[0] >= 100:
             win = random.random() < 0.25
-            amount = 1000 if win else -100
+            amount = 500 if win else -100
             await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
             await db.commit()
-            text = "Вы выиграли 1000 монет!" if win else "Вы проиграли 100 монет."
+            text = "Вы выиграли 500 монет!" if win else "Вы проиграли 100 монет."
             await msg.answer(text)
         else:
             await msg.answer("У вас недостаточно монет (нужно минимум 100).")
-
-@dp.message(Command("promo"))
-async def promo_handler(msg: types.Message):
-    user_id = msg.from_user.id
-    parts = msg.text.split()
-    if len(parts) == 2:
-        code = parts[1]
-        async with aiosqlite.connect(DB_NAME) as db:
-            cur = await db.execute("SELECT amount FROM promocodes WHERE code = ?", (code,))
-            promo = await cur.fetchone()
-            if promo:
-                await db.execute("DELETE FROM promocodes WHERE code = ?", (code,))
-                await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (promo[0], user_id))
-                await db.commit()
-                await msg.answer(f"Промокод активирован! Вы получили {promo[0]} монет.")
-            else:
-                await msg.answer("Неверный или уже использованный промокод.")
-    else:
-        await msg.answer("Используйте формат: /promo КОД")
-
-@dp.message(Command("createpromo"))
-async def create_promo(msg: types.Message):
-    if msg.from_user.id not in ADMIN_IDS:
-        return
-    parts = msg.text.split()
-    if len(parts) != 3:
-        await msg.answer("Формат: /createpromo КОД СУММА")
-        return
-    code, amount = parts[1], int(parts[2])
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("INSERT OR REPLACE INTO promocodes (code, amount) VALUES (?, ?)", (code, amount))
-        await db.commit()
-        await msg.answer(f"Промокод {code} создан на сумму {amount} монет.")
 
 # --- Запуск ---
 async def main():
@@ -172,6 +179,7 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     asyncio.run(main())
 
 
