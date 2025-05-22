@@ -1,237 +1,179 @@
 import asyncio
-import sqlite3
 import logging
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery
-from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.enums import ParseMode
-from aiogram.utils.markdown import hbold
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.methods import GetChatMember
+from aiogram.filters import CommandStart, Command
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+import random
 
-TOKEN = "7558760680:AAHhhuACxlLgfkOwskeA5B9dzZ4GZp2uk8c"
-CHANNEL_ID = "@economicbotlive"
-ADMIN_USERNAMES = ["@noaulish"]
+API_TOKEN = "YOUR_API_TOKEN_HERE"
+CHANNEL_USERNAME = "@economicbotlive"
+ADMINS = ["admin_username"]
 
-bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML, session=AiohttpSession())
-dp = Dispatcher()
+bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
+dp = Dispatcher(storage=MemoryStorage())
 
-# Настройка логов
-logging.basicConfig(level=logging.INFO)
+# Временное хранилище пользователей, монет и т.д.
+users_data = {}
 
-# SQLite
-conn = sqlite3.connect("bot.db")
-cursor = conn.cursor()
+# Данные магазина и работ
+shop_items = [{"name": f"Предмет {i+1}", "price": (i+1)*100, "income": (i+1)*10} for i in range(30)]
+jobs = [{"name": f"Работа {i+1}", "salary": (i+1)*50} for i in range(15)]
 
-cursor.execute("""CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    balance INTEGER DEFAULT 0,
-    referrer INTEGER,
-    referrals INTEGER DEFAULT 0,
-    vip INTEGER DEFAULT 0
-)""")
+# Функции
 
-cursor.execute("""CREATE TABLE IF NOT EXISTS items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    price INTEGER,
-    income INTEGER
-)""")
+def get_user_data(user_id):
+    if user_id not in users_data:
+        users_data[user_id] = {
+            "coins": 100,
+            "inventory": [],
+            "job": None,
+            "referrals": 0,
+            "vip": False
+        }
+    return users_data[user_id]
 
-cursor.execute("""CREATE TABLE IF NOT EXISTS inventory (
-    user_id INTEGER,
-    item_id INTEGER,
-    count INTEGER DEFAULT 0,
-    FOREIGN KEY(item_id) REFERENCES items(id)
-)""")
+async def check_subscription(user_id):
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        return member.status in ("member", "creator", "administrator")
+    except:
+        return False
 
-cursor.execute("""CREATE TABLE IF NOT EXISTS promo (
-    code TEXT PRIMARY KEY,
-    reward INTEGER
-)""")
+def is_admin(username):
+    return username in ADMINS
 
-cursor.execute("""CREATE TABLE IF NOT EXISTS jobs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT,
-    reward INTEGER
-)""")
-
-conn.commit()
-
-# Инициализация предметов и работ
-def initialize_items_and_jobs():
-    cursor.execute("SELECT COUNT(*) FROM items")
-    if cursor.fetchone()[0] == 0:
-        for i in range(30):
-            name = f"Предмет {i+1}"
-            price = (i+1)*100
-            income = (i+1)*10
-            cursor.execute("INSERT INTO items (name, price, income) VALUES (?, ?, ?)", (name, price, income))
-    cursor.execute("SELECT COUNT(*) FROM jobs")
-    if cursor.fetchone()[0] == 0:
-        job_list = [
-            ("Курьер", 50),
-            ("Продавец", 60),
-            ("Официант", 70),
-            ("Кассир", 80),
-            ("Грузчик", 90),
-            ("Повар", 100),
-            ("Бармен", 110),
-            ("Программист", 120),
-            ("Дизайнер", 130),
-            ("Инженер", 140),
-            ("Водитель", 150),
-            ("Таксист", 160),
-            ("Адвокат", 170),
-            ("Врач", 180),
-            ("Пилот", 200)
-        ]
-        for name, reward in job_list:
-            cursor.execute("INSERT INTO jobs (name, reward) VALUES (?, ?)", (name, reward))
-    conn.commit()
-
-initialize_items_and_jobs()
-
-# Клавиатура
-def main_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
-        [InlineKeyboardButton(text="🏆 Топ", callback_data="top")],
-        [InlineKeyboardButton(text="🛍 Магазин", callback_data="shop")],
-        [InlineKeyboardButton(text="💼 Работа", callback_data="work")],
-        [InlineKeyboardButton(text="🎁 Промокод", callback_data="promo")],
-        [InlineKeyboardButton(text="🎒 Инвентарь", callback_data="inventory")]
-    ])
-
-def admin_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📢 Рассылка", callback_data="broadcast")],
-        [InlineKeyboardButton(text="🛠 Памятка", callback_data="admin_help")]
-    ])
+# Команды
 
 @dp.message(CommandStart())
 async def start(message: Message):
     user_id = message.from_user.id
-    username = message.from_user.username
-    ref = message.text.split(" ")[1] if len(message.text.split()) > 1 else None
+    user_data = get_user_data(user_id)
+    if not await check_subscription(user_id):
+        markup = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ Подписаться", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")
+        ]])
+        await message.answer("❗ Для использования бота подпишитесь на канал.", reply_markup=markup)
+        return
 
-    chat_member = await bot(GetChatMember(chat_id=CHANNEL_ID, user_id=user_id))
-    if chat_member.status == "left":
-        return await message.answer(f"Подпишитесь на канал {CHANNEL_ID} и попробуйте снова.")
+    args = message.text.split()
+    if len(args) > 1:
+        ref_id = int(args[1])
+        if ref_id != user_id and ref_id in users_data:
+            users_data[ref_id]["coins"] += 50
+            users_data[ref_id]["referrals"] += 1
 
-    cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO users (user_id, username, balance, referrer) VALUES (?, ?, ?, ?)",
-                       (user_id, username, 100, int(ref) if ref and ref.isdigit() else None))
-        if ref and ref.isdigit():
-            cursor.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id = ?", (int(ref),))
-        conn.commit()
+    await message.answer("👋 Добро пожаловать в экономический бот!", reply_markup=main_menu())
 
-    await message.answer(f"Добро пожаловать, {hbold(message.from_user.full_name)}!", reply_markup=main_keyboard())
-
-@dp.callback_query(F.data == "profile")
-async def profile(callback: CallbackQuery):
-    cursor.execute("SELECT balance, referrals, vip FROM users WHERE user_id = ?", (callback.from_user.id,))
-    bal, refs, vip = cursor.fetchone()
-    vip_status = "✅" if vip else "❌"
-    await callback.message.edit_text(f"👤 Ваш профиль\n💰 Баланс: {bal}\n👥 Рефералы: {refs}\n💎 VIP: {vip_status}", reply_markup=main_keyboard())
-
-@dp.callback_query(F.data == "top")
-async def top(callback: CallbackQuery):
-    cursor.execute("SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 10")
-    top_bal = cursor.fetchall()
-
-    cursor.execute("SELECT user_id, referrals FROM users ORDER BY referrals DESC LIMIT 10")
-    top_refs = cursor.fetchall()
-
-    text = "<b>🏆 Топ по балансу:</b>\n"
-    for i, (uid, bal) in enumerate(top_bal, 1):
-        text += f"{i}. <a href='tg://user?id={uid}'>{uid}</a> — {bal} монет\n"
-
-    text += "\n<b>👥 Топ по рефералам:</b>\n"
-    for i, (uid, refs) in enumerate(top_refs, 1):
-        text += f"{i}. <a href='tg://user?id={uid}'>{uid}</a> — {refs} рефералов\n"
-
-    await callback.message.edit_text(text, reply_markup=main_keyboard())
-
-@dp.callback_query(F.data == "shop")
-async def shop(callback: CallbackQuery):
-    cursor.execute("SELECT id, name, price, income FROM items")
-    items = cursor.fetchall()
-
-    if not items:
-        return await callback.message.edit_text("🛍 Магазин пуст", reply_markup=main_keyboard())
-
-    text = "<b>🛍 Магазин предметов:</b>\n"
-    for item_id, name, price, income in items:
-        text += f"{item_id}. {name} — {price} монет (доход: {income}/ч)\n"
-
-    text += "\nНапиши номер предмета для покупки."
-    await callback.message.edit_text(text)
-
-@dp.message(F.text.regexp(r"^\d+$"))
-async def buy_item(message: Message):
-    user_id = message.from_user.id
-    item_id = int(message.text)
-
-    cursor.execute("SELECT name, price FROM items WHERE id = ?", (item_id,))
-    item = cursor.fetchone()
-    if not item:
-        return await message.answer("❌ Предмет не найден.")
-
-    name, price = item
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    balance = cursor.fetchone()[0]
-
-    if balance < price:
-        return await message.answer("❌ Недостаточно монет.")
-
-    cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (price, user_id))
-    cursor.execute("INSERT INTO inventory (user_id, item_id, count) VALUES (?, ?, 1) ON CONFLICT(user_id, item_id) DO UPDATE SET count = count + 1", (user_id, item_id))
-    conn.commit()
-
-    await message.answer(f"✅ Вы купили {name}")
-
-@dp.callback_query(F.data == "inventory")
-async def show_inventory(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    cursor.execute("""
-        SELECT items.name, inventory.count FROM inventory
-        JOIN items ON inventory.item_id = items.id
-        WHERE inventory.user_id = ?
-    """, (user_id,))
-    items = cursor.fetchall()
-
-    if not items:
-        return await callback.message.edit_text("🎒 Ваш инвентарь пуст.", reply_markup=main_keyboard())
-
-    text = "🎒 Ваш инвентарь:\n"
-    for name, count in items:
-        text += f"{name} — {count} шт.\n"
-
-    await callback.message.edit_text(text, reply_markup=main_keyboard())
+def main_menu():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="💼 Работа", callback_data="work")
+    builder.button(text="🛒 Магазин", callback_data="shop")
+    builder.button(text="🎒 Инвентарь", callback_data="inventory")
+    builder.button(text="📊 Топ", callback_data="top")
+    builder.button(text="🎰 Казино", callback_data="casino")
+    builder.button(text="🎁 Промокод", callback_data="promo")
+    return builder.as_markup()
 
 @dp.callback_query(F.data == "work")
-async def show_jobs(callback: CallbackQuery):
-    cursor.execute("SELECT id, name, reward FROM jobs")
-    jobs = cursor.fetchall()
+async def choose_work(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    for i, job in enumerate(jobs[:15]):
+        builder.button(text=f"{job['name']} — 💰{job['salary']}", callback_data=f"job_{i}")
+    await callback.message.edit_text("💼 Выберите работу:", reply_markup=builder.as_markup())
 
-    if not jobs:
-        return await callback.message.edit_text("💼 Нет доступных работ.", reply_markup=main_keyboard())
+@dp.callback_query(F.data.startswith("job_"))
+async def set_job(callback: types.CallbackQuery):
+    index = int(callback.data.split("_")[1])
+    user_data = get_user_data(callback.from_user.id)
+    user_data["job"] = jobs[index]
+    await callback.message.edit_text(f"✅ Вы устроились на работу: {jobs[index]['name']}")
 
-    text = "<b>💼 Доступные работы:</b>\n"
-    for job_id, name, reward in jobs:
-        text += f"{job_id}. {name} — {reward} монет\n"
-
-    text += "\nНапиши номер работы для выполнения."
+@dp.callback_query(F.data == "shop")
+async def show_shop(callback: types.CallbackQuery):
+    text = "🛒 <b>Магазин предметов</b>
+"
+    for i, item in enumerate(shop_items[:30]):
+        text += f"
+{i+1}. {item['name']} — 💰{item['price']} | 📈 +{item['income']}/ч"
     await callback.message.edit_text(text)
 
-@dp.message(F.text.regexp(r"^\d+$"))
-async def do_job(message: Message):
-    job_id =
-::contentReference[oaicite:31]{index=31}
+@dp.callback_query(F.data == "inventory")
+async def show_inventory(callback: types.CallbackQuery):
+    user_data = get_user_data(callback.from_user.id)
+    inventory = user_data["inventory"]
+    if not inventory:
+        await callback.message.edit_text("🎒 Ваш инвентарь пуст.")
+        return
+    text = "🎒 <b>Ваш инвентарь:</b>
+"
+    for item in inventory:
+        text += f"- {item['name']} (+{item['income']}/ч)
+"
+    await callback.message.edit_text(text)
+
+@dp.callback_query(F.data == "casino")
+async def casino(callback: types.CallbackQuery):
+    user_data = get_user_data(callback.from_user.id)
+    win = random.randint(0, 100)
+    if win < 40:
+        amount = random.randint(10, 50)
+        user_data["coins"] += amount
+        await callback.message.edit_text(f"🎰 Вы выиграли {amount} монет!")
+    else:
+        amount = random.randint(10, 30)
+        user_data["coins"] -= amount
+        await callback.message.edit_text(f"🎰 Вы проиграли {amount} монет.")
+
+@dp.callback_query(F.data == "promo")
+async def promo(callback: types.CallbackQuery):
+    await callback.message.edit_text("🎁 Промокоды доступны только от администратора.")
+
+@dp.message(Command("admin"))
+async def admin_panel(message: Message):
+    if not is_admin(message.from_user.username):
+        await message.answer("⛔ Нет доступа.")
+        return
+    await message.answer("🛠 Админ-панель:
+/admin_stats
+/admin_broadcast <текст>")
+
+@dp.message(Command("admin_stats"))
+async def admin_stats(message: Message):
+    if not is_admin(message.from_user.username):
+        return
+    await message.answer(f"👥 Всего пользователей: {len(users_data)}")
+
+@dp.message(Command("admin_broadcast"))
+async def broadcast(message: Message):
+    if not is_admin(message.from_user.username):
+        return
+    text = message.text[len("/admin_broadcast "):]
+    for user_id in users_data:
+        try:
+            await bot.send_message(user_id, f"📢 Рассылка от админа:
+
+{text}")
+        except:
+            continue
+    await message.answer("✅ Рассылка завершена.")
+
+async def income_loop():
+    while True:
+        await asyncio.sleep(3600)
+        for user_id, data in users_data.items():
+            for item in data["inventory"]:
+                data["coins"] += item["income"]
+
+async def main():
+    asyncio.create_task(income_loop())
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(main())
 
 
 
