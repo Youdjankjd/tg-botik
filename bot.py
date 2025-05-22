@@ -1,181 +1,211 @@
 import asyncio
 import random
 import time
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.enums import ParseMode
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.fsm.storage.memory import MemoryStorage
 import aiosqlite
+from aiogram import Bot, Dispatcher, F, Router, types
+from aiogram.enums import ParseMode
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import CommandStart
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramBadRequest
 
 TOKEN = "7558760680:AAHhhuACxlLgfkOwskeA5B9dzZ4GZp2uk8c"
-CHANNEL_USERNAME = "@economicbotlive"
+CHANNEL_USERNAME = "economicbotlive"
 ADMIN_IDS = [6505085514]
 DB_NAME = "bot.db"
 
-bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
-dp = Dispatcher(storage=MemoryStorage())
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
 
-# Клавиатура
-main_kb = ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[
-    [KeyboardButton("💰 Баланс"), KeyboardButton("🎰 Казино"), KeyboardButton("🎁 Рулетка")],
-    [KeyboardButton("🛒 Магазин"), KeyboardButton("💼 Работа"), KeyboardButton("📦 Инвентарь")],
-    [KeyboardButton("👑 ТОП"), KeyboardButton("👥 Рефералы")]
-])
+main_kb = ReplyKeyboardMarkup(keyboard=[
+    [KeyboardButton(text="💰 Баланс"), KeyboardButton(text="🎰 Казино"), KeyboardButton(text="🎁 Рулетка")],
+    [KeyboardButton(text="🛒 Магазин"), KeyboardButton(text="💼 Работа"), KeyboardButton(text="🎒 Инвентарь")],
+    [KeyboardButton(text="👑 ТОП"), KeyboardButton(text="👥 Рефералы")]
+], resize_keyboard=True)
 
-subscribe_kb = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text="🔗 Подписаться", url="https://t.me/economicbotlive")],
-    [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_sub")]
-])
+@dp.message(CommandStart())
+async def cmd_start(message: Message):
+    user_id = message.from_user.id
 
-# Инициализация БД
-async def init_db():
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("""CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            balance INTEGER DEFAULT 0,
-            vip INTEGER DEFAULT 0,
-            mod INTEGER DEFAULT 0,
-            referrer INTEGER,
-            referrals INTEGER DEFAULT 0,
-            last_daily INTEGER DEFAULT 0
-        )""")
-        await db.execute("""CREATE TABLE IF NOT EXISTS items (
-            user_id INTEGER,
-            item_name TEXT,
-            amount INTEGER
-        )""")
-        await db.execute("""CREATE TABLE IF NOT EXISTS promo_codes (
-            code TEXT PRIMARY KEY,
-            reward INTEGER
-        )""")
-        await db.commit()
-
-# Проверка подписки
-async def check_subscription(user_id):
     try:
-        member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ["member", "administrator", "creator"]
+        member = await bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
+        if member.status in ("left", "kicked"):
+            raise TelegramBadRequest("Not subscribed")
     except:
-        return False
-
-# Старт
-@dp.message(F.text == "/start")
-async def start_handler(msg: Message):
-    user_id = msg.from_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        result = await db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-        user = await result.fetchone()
-        if not user:
-            args = msg.text.split()
-            referrer = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
-            await db.execute("INSERT INTO users (user_id, referrer) VALUES (?, ?)", (user_id, referrer))
-            if referrer:
-                await db.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id = ?", (referrer,))
-            await db.commit()
-
-    if not await check_subscription(user_id):
-        await msg.answer("👋 Привет! Чтобы играть, подпишись на наш канал:", reply_markup=subscribe_kb)
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 Подписаться", url=f"https://t.me/{CHANNEL_USERNAME}")],
+            [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="check_sub")]
+        ])
+        await message.answer("❗ Чтобы пользоваться ботом, подпишитесь на канал и нажмите «Проверить подписку».", reply_markup=markup)
         return
 
-    await msg.answer("Добро пожаловать в экономическую игру!", reply_markup=main_kb)
-
-# Проверка подписки (по кнопке)
-@dp.callback_query(F.data == "check_sub")
-async def verify_subscription(callback: types.CallbackQuery):
-    if await check_subscription(callback.from_user.id):
-        await callback.message.edit_text("✅ Подписка подтверждена!")
-        await callback.message.answer("Добро пожаловать!", reply_markup=main_kb)
-    else:
-        await callback.answer("❌ Вы не подписаны!", show_alert=True)
-
-# Баланс
-@dp.message(F.text == "💰 Баланс")
-async def balance_handler(msg: Message):
-    user_id = msg.from_user.id
     async with aiosqlite.connect(DB_NAME) as db:
-        res = await db.execute("SELECT balance, vip, mod FROM users WHERE user_id = ?", (user_id,))
-        user = await res.fetchone()
-        if user:
-            balance, vip, mod = user
-            status = "Обычный"
-            if vip:
-                status = "VIP"
-            if mod:
-                status = "Модератор"
-            await msg.answer(f"💰 Баланс: {balance} монет\n🏷 Статус: {status}")
-        else:
-            await msg.answer("❌ Вы не зарегистрированы. Напишите /start")
-
-# Рулетка
-@dp.message(F.text == "🎁 Рулетка")
-async def roulette_handler(msg: Message):
-    user_id = msg.from_user.id
-    now = int(time.time())
-    async with aiosqlite.connect(DB_NAME) as db:
-        res = await db.execute("SELECT last_daily FROM users WHERE user_id = ?", (user_id,))
-        last = (await res.fetchone())[0]
-        if now - last < 86400:
-            remain = 86400 - (now - last)
-            hours = remain // 3600
-            minutes = (remain % 3600) // 60
-            await msg.answer(f"⏳ Уже крутили рулетку. Ждите {hours} ч. {minutes} мин.")
-            return
-        amount = random.choices([0, 500, 1000, 2500, 5000], weights=[50, 25, 15, 8, 2])[0]
-        await db.execute("UPDATE users SET balance = balance + ?, last_daily = ? WHERE user_id = ?", (amount, now, user_id))
+        await db.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0, vip INTEGER DEFAULT 0, mod INTEGER DEFAULT 0, referrer INTEGER, referrals INTEGER DEFAULT 0, last_daily INTEGER DEFAULT 0)")
+        await db.execute("CREATE TABLE IF NOT EXISTS items (user_id INTEGER, item_name TEXT, amount INTEGER)")
+        await db.execute("CREATE TABLE IF NOT EXISTS promocodes (code TEXT PRIMARY KEY, reward INTEGER)")
         await db.commit()
-        await msg.answer(f"🎉 Вы получили {amount} монет!")
 
-# Казино
-@dp.message(F.text == "🎰 Казино")
-async def casino_handler(msg: Message):
-    user_id = msg.from_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        res = await db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-        balance = (await res.fetchone())[0]
-        if balance >= 100:
-            win = random.random() < 0.25
-            delta = 1000 if win else -100
-            await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (delta, user_id))
+        user = await db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        if not await user.fetchone():
+            ref = message.text.split(" ")
+            ref_id = int(ref[1]) if len(ref) > 1 and ref[1].isdigit() else None
+            await db.execute("INSERT INTO users (user_id, referrer) VALUES (?, ?)", (user_id, ref_id))
+            if ref_id:
+                await db.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id = ?", (ref_id,))
             await db.commit()
-            text = "🎉 Вы выиграли 1000 монет!" if win else "😢 Вы проиграли 100 монет."
-            await msg.answer(text)
-        else:
-            await msg.answer("❌ Не хватает монет (нужно 100+)")
+    await message.answer("🎉 Добро пожаловать в экономический бот!", reply_markup=main_kb)
 
-# Промокоды
-@dp.message(F.text.startswith("ПРОМО"))
-async def promo_handler(msg: Message):
-    code = msg.text.split("ПРОМО")[1].strip()
-    user_id = msg.from_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        res = await db.execute("SELECT reward FROM promo_codes WHERE code = ?", (code,))
-        promo = await res.fetchone()
-        if promo:
-            await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (promo[0], user_id))
-            await db.execute("DELETE FROM promo_codes WHERE code = ?", (code,))
-            await db.commit()
-            await msg.answer(f"🎁 Вы активировали промокод и получили {promo[0]} монет!")
-        else:
-            await msg.answer("❌ Неверный или использованный промокод.")
-
-# Команда для добавления промокода
-@dp.message(F.text.startswith("/addpromo"))
-async def add_promo(msg: Message):
-    if msg.from_user.id not in ADMIN_IDS:
-        return await msg.answer("❌ У вас нет прав.")
+@dp.callback_query(lambda c: c.data == "check_sub")
+async def check_subscription(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
     try:
-        _, code, reward = msg.text.split()
-        reward = int(reward)
-        async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute("INSERT INTO promo_codes (code, reward) VALUES (?, ?)", (code, reward))
-            await db.commit()
-            await msg.answer("✅ Промокод добавлен.")
+        member = await bot.get_chat_member(chat_id=f"@{CHANNEL_USERNAME}", user_id=user_id)
+        if member.status in ("left", "kicked"):
+            raise Exception()
+        await bot.send_message(user_id, "✅ Подписка подтверждена! Введите /start")
     except:
-        await msg.answer("Пример: /addpromo КОД 500")
+        await bot.send_message(user_id, "❌ Вы не подписаны на канал!")
 
-# Запуск
+
+@dp.message(F.text == "💰 Баланс")
+async def balance(message: Message):
+    user_id = message.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        user = await db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        balance = (await user.fetchone())[0]
+    await message.answer(f"💰 Ваш баланс: <b>{balance} монет</b>")
+
+@dp.message(F.text == "🎰 Казино")
+async def casino(message: Message):
+    user_id = message.from_user.id
+    bet = 100
+    async with aiosqlite.connect(DB_NAME) as db:
+        user = await db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        row = await user.fetchone()
+        if row is None or row[0] < bet:
+            await message.answer("❌ Недостаточно средств.")
+            return
+        result = random.choice([True, False, False])
+        if result:
+            await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (bet, user_id))
+            await message.answer("🎉 Вы выиграли 100 монет!")
+        else:
+            await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (bet, user_id))
+            await message.answer("😢 Вы проиграли 100 монет.")
+        await db.commit()
+
+@dp.message(F.text == "🎁 Рулетка")
+async def daily(message: Message):
+    user_id = message.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        row = await db.execute("SELECT last_daily FROM users WHERE user_id = ?", (user_id,))
+        last = (await row.fetchone())[0]
+        now = int(time.time())
+        if now - last < 86400:
+            remaining = 86400 - (now - last)
+            await message.answer(f"⏳ Приходите через {remaining // 3600}ч {remaining % 3600 // 60}м.")
+            return
+        reward = random.randint(50, 200)
+        await db.execute("UPDATE users SET balance = balance + ?, last_daily = ? WHERE user_id = ?", (reward, now, user_id))
+        await db.commit()
+    await message.answer(f"🎁 Вы получили {reward} монет!")
+
+@dp.message(F.text.startswith("/promo"))
+async def promo(message: Message):
+    parts = message.text.split(" ")
+    if len(parts) < 2:
+        await message.answer("❗ Использование: /promo КОД")
+        return
+    code = parts[1]
+    user_id = message.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        result = await db.execute("SELECT reward FROM promocodes WHERE code = ?", (code,))
+        data = await result.fetchone()
+        if not data:
+            await message.answer("❌ Промокод не найден.")
+            return
+        reward = data[0]
+        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (reward, user_id))
+        await db.execute("DELETE FROM promocodes WHERE code = ?", (code,))
+        await db.commit()
+    await message.answer(f"✅ Промокод активирован! Вы получили {reward} монет.")
+
+@dp.message(F.text.startswith("/addpromo"))
+async def add_promo(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    parts = message.text.split(" ")
+    if len(parts) < 3:
+        await message.answer("❗ Использование: /addpromo КОД СУММА")
+        return
+    code = parts[1]
+    try:
+        reward = int(parts[2])
+    except ValueError:
+        return await message.answer("❗ Сумма должна быть числом.")
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("INSERT OR REPLACE INTO promocodes (code, reward) VALUES (?, ?)", (code, reward))
+        await db.commit()
+    await message.answer(f"✅ Промокод {code} на {reward} монет создан.")
+
+
+@dp.message(F.text == "👥 Рефералы")
+async def referrals(message: Message):
+    user_id = message.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        row = await db.execute("SELECT referrals FROM users WHERE user_id = ?", (user_id,))
+        count = (await row.fetchone())[0]
+    await message.answer(f"👥 Вы пригласили {count} пользователей.
+🔗 Ваша ссылка: https://t.me/{(await bot.me()).username}?start={user_id}")
+
+@dp.message(F.text == "👑 ТОП")
+async def top(message: Message):
+    async with aiosqlite.connect(DB_NAME) as db:
+        top_money = await db.execute("SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 5")
+        top_ref = await db.execute("SELECT user_id, referrals FROM users ORDER BY referrals DESC LIMIT 5")
+        money = await top_money.fetchall()
+        refs = await top_ref.fetchall()
+    msg = "💸 ТОП 5 по балансу:
+"
+    for i, (uid, bal) in enumerate(money, 1):
+        msg += f"{i}. <a href='tg://user?id={uid}'>Пользователь</a> — {bal} монет
+"
+    msg += "
+👥 ТОП 5 по рефералам:
+"
+    for i, (uid, r) in enumerate(refs, 1):
+        msg += f"{i}. <a href='tg://user?id={uid}'>Пользователь</a> — {r} рефералов
+"
+    await message.answer(msg)
+
+@dp.message(F.text == "🛒 Магазин")
+async def shop(message: Message):
+    await message.answer("🛒 В магазине пока ничего нет.")
+
+@dp.message(F.text == "💼 Работа")
+async def work(message: Message):
+    earnings = random.randint(20, 100)
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (earnings, message.from_user.id))
+        await db.commit()
+    await message.answer(f"💼 Вы поработали и получили {earnings} монет.")
+
+@dp.message(F.text == "🎒 Инвентарь")
+async def inventory(message: Message):
+    user_id = message.from_user.id
+    async with aiosqlite.connect(DB_NAME) as db:
+        items = await db.execute("SELECT item_name, amount FROM items WHERE user_id = ?", (user_id,))
+        data = await items.fetchall()
+    if not data:
+        await message.answer("🎒 Ваш инвентарь пуст.")
+    else:
+        text = "🎒 Ваш инвентарь:
+" + "
+".join([f"{name} — {amount} шт." for name, amount in data])
+        await message.answer(text)
+
 async def main():
-    await init_db()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
