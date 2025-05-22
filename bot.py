@@ -156,7 +156,7 @@ async def referrals(message: Message):
     async with aiosqlite.connect(DB_NAME) as db:
         row = await db.execute("SELECT referrals FROM users WHERE user_id = ?", (user_id,))
         count = (await row.fetchone())[0]
-    await message.answer(f"👥 Вы пригласили {count} пользователей.
+    await message.answer(f"👥 Вы пригласили {count} пользователей.")
 🔗 Ваша ссылка: https://t.me/{(await bot.me()).username}?start={user_id}")
 
 @dp.message(F.text == "👑 ТОП")
