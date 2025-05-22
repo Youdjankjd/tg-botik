@@ -95,7 +95,8 @@ async def set_job(callback: types.CallbackQuery):
 async def show_shop(callback: types.CallbackQuery):
     text = "🛒 <b>Магазин предметов</b>"
     for i, item in enumerate(shop_items[:30]):
-        text += f"
+        name = "Пользователь"
+text += f"Привет, {name}! Добро пожаловать."
 {i+1}. {item['name']} — 💰{item['price']} | 📈 +{item['income']}/ч"
     await callback.message.edit_text(text)
 
