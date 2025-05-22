@@ -10,9 +10,9 @@ from aiogram.utils.markdown import hbold
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.methods import GetChatMember
 
-TOKEN = "ВАШ_ТОКЕН"
+TOKEN = "7558760680:AAHhhuACxlLgfkOwskeA5B9dzZ4GZp2uk8c"
 CHANNEL_ID = "@economicbotlive"
-ADMIN_IDS = [123456789]  # замените на ваши Telegram ID
+ADMIN_IDS = [6505085514] 
 
 bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML, session=AiohttpSession())
 dp = Dispatcher()
