@@ -13,8 +13,15 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 TOKEN = "7558760680:AAHhhuACxlLgfkOwskeA5B9dzZ4GZp2uk8c"
 ADMIN_IDS = [6505085514]
-CHANNEL_ID = -1002106643840  # id канала @economicbotlive
+CHANNEL_ID = "@economicbotlive"  # Используем username вместо числового ID
 
+async def is_subscribed(user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ("member", "administrator", "creator")
+    except Exception as e:
+        print(f"[Проверка подписки] Ошибка: {e}")
+        return False
 bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
