@@ -1,190 +1,117 @@
 import asyncio
-import logging
 import random
 import aiosqlite
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.utils import executor
 
 TOKEN = "7558760680:AAHhhuACxlLgfkOwskeA5B9dzZ4GZp2uk8c"
+ADMIN_IDS = [6505085514]  # замените на ваш Telegram ID
 
-bot = Bot(token=TOKEN, parse_mode="HTML")
+bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
 
-DB_NAME = "economy.db"
+DB_NAME = "bot.db"
 
+# --- Кнопки ---
+main_kb = ReplyKeyboardMarkup(resize_keyboard=True)
+main_kb.add("\U0001F4B0 Баланс", "\U0001F3B0 Казино", "\U0001F4B8 Рулетка")
+main_kb.add("\U0001F6D2 Магазин", "\U0001F4BC Работа", "\U0001F4E6 Инвентарь")
+main_kb.add("\U0001F451 ТОП", "\U0001F465 Рефералы")
+
+# --- Инициализация БД ---
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute('''CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            balance INTEGER DEFAULT 0,
-            inventory TEXT DEFAULT '',
-            last_spin INTEGER DEFAULT 0
-        )''')
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                balance INTEGER DEFAULT 0,
+                vip INTEGER DEFAULT 0,
+                mod INTEGER DEFAULT 0,
+                referrer INTEGER,
+                referrals INTEGER DEFAULT 0,
+                last_daily INTEGER DEFAULT 0
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS items (
+                user_id INTEGER,
+                item_name TEXT,
+                amount INTEGER
+            )
+        """)
         await db.commit()
 
+# --- Команды ---
 @dp.message_handler(commands=["start"])
-async def start(msg: types.Message):
+async def start_cmd(msg: types.Message):
     user_id = msg.from_user.id
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-        await db.commit()
-    await msg.answer("🎮 Добро пожаловать в экономическую игру! Используй /help для списка команд.")
+        user = await db.execute_fetchone("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        if not user:
+            ref = msg.get_args()
+            ref_id = int(ref) if ref.isdigit() else None
+            await db.execute("INSERT INTO users (user_id, referrer) VALUES (?, ?)", (user_id, ref_id))
+            if ref_id:
+                await db.execute("UPDATE users SET referrals = referrals + 1 WHERE user_id = ?", (ref_id,))
+            await db.commit()
+    await msg.answer("Добро пожаловать в экономическую игру!", reply_markup=main_kb)
 
-@dp.message_handler(commands=["help"])
-async def help(msg: types.Message):
-    await msg.answer("""
-Команды:
-💰 /balance — баланс
-🎁 /daily — ежедневная рулетка
-🎲 /casino — казино
-🪙 /coin — орёл и решка
-🛒 /shop — магазин
-🎒 /inventory — инвентарь
-💎 /vip — купить VIP (200000 монет)
-🛡 /mod — купить модерку (10000000 монет)
-""")
-
-@dp.message_handler(commands=["balance"])
+@dp.message_handler(lambda m: m.text == "\U0001F4B0 Баланс")
 async def balance(msg: types.Message):
     user_id = msg.from_user.id
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,)) as c:
-            row = await c.fetchone()
-            await msg.answer(f"💰 Баланс: {row[0]} монет")
+        user = await db.execute_fetchone("SELECT balance, vip, mod FROM users WHERE user_id = ?", (user_id,))
+        if user:
+            bal, vip, mod = user
+            status = "VIP" if vip else "Обычный"
+            if mod:
+                status = "Модератор"
+            await msg.answer(f"Ваш баланс: {bal} монет\nСтатус: {status}")
+        else:
+            await msg.answer("Вы не зарегистрированы. Напишите /start")
 
-@dp.message_handler(commands=["daily"])
-async def daily(msg: types.Message):
+@dp.message_handler(lambda m: m.text == "\U0001F4B8 Рулетка")
+async def roulette(msg: types.Message):
     import time
     user_id = msg.from_user.id
     now = int(time.time())
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT last_spin FROM users WHERE user_id = ?", (user_id,)) as c:
-            row = await c.fetchone()
-            if now - row[0] < 86400:
-                await msg.answer("⏳ Ты уже получал рулетку сегодня. Попробуй позже.")
+        user = await db.execute_fetchone("SELECT last_daily FROM users WHERE user_id = ?", (user_id,))
+        if user:
+            last = user[0]
+            if now - last < 86400:
+                remain = 86400 - (now - last)
+                hours = remain // 3600
+                minutes = (remain % 3600) // 60
+                await msg.answer(f"Вы уже получали рулетку. Подождите {hours} ч. {minutes} мин.")
                 return
-        reward = random.randint(100, 5000)
-        await db.execute("UPDATE users SET balance = balance + ?, last_spin = ? WHERE user_id = ?", (reward, now, user_id))
-        await db.commit()
-        await msg.answer(f"🎁 Ты получил {reward} монет!")
+            amount = random.choices([0, 500, 1000, 2500, 5000], weights=[50, 25, 15, 8, 2])[0]
+            await db.execute("UPDATE users SET balance = balance + ?, last_daily = ? WHERE user_id = ?", (amount, now, user_id))
+            await db.commit()
+            await msg.answer(f"Вы выиграли {amount} монет в рулетке!")
 
-@dp.message_handler(commands=["casino"])
+@dp.message_handler(lambda m: m.text == "\U0001F3B0 Казино")
 async def casino(msg: types.Message):
     user_id = msg.from_user.id
-    win = random.choice([True, False])
-    amount = random.randint(100, 10000)
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,)) as c:
-            bal = (await c.fetchone())[0]
-        if bal < amount:
-            await msg.answer("❌ Недостаточно монет для игры в казино.")
-            return
-        if win:
+        user = await db.execute_fetchone("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        if user and user[0] >= 100:
+            win = random.random() < 0.25
+            amount = 1000 if win else -100
             await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
-            await msg.answer(f"🎉 Ты выиграл {amount} монет!")
-        else:
-            await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (amount, user_id))
-            await msg.answer(f"😢 Ты проиграл {amount} монет.")
-        await db.commit()
-
-@dp.message_handler(commands=["coin"])
-async def coin(msg: types.Message):
-    user_id = msg.from_user.id
-    choice = random.choice(["Орёл", "Решка"])
-    reward = random.randint(500, 1500)
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (reward, user_id))
-        await db.commit()
-    await msg.answer(f"🪙 Выпал {choice}! Ты получил {reward} монет!")
-
-items = [
-    ("Кот в шляпе", 1000),
-    ("Супер тапки", 2500),
-    ("Пельмени", 500),
-    ("Гармония", 3000),
-    ("Стикербомб", 4000),
-    ("Тостер", 1500),
-    ("Кепка", 1800),
-    ("Крутая футболка", 3000),
-    ("Карандаш", 800),
-    ("Ручка", 900),
-]
-
-@dp.message_handler(commands=["shop"])
-async def shop(msg: types.Message):
-    text = "🛒 Магазин:\n"
-    for i, (name, price) in enumerate(items, 1):
-        text += f"{i}. {name} — {price} монет\n"
-    text += "\nКупить: /buy <номер>"
-    await msg.answer(text)
-
-@dp.message_handler(lambda m: m.text.startswith("/buy"))
-async def buy(msg: types.Message):
-    parts = msg.text.split()
-    if len(parts) != 2 or not parts[1].isdigit():
-        await msg.answer("❌ Пример использования: /buy 1")
-        return
-    index = int(parts[1]) - 1
-    if index < 0 or index >= len(items):
-        await msg.answer("❌ Нет такого предмета.")
-        return
-    item_name, price = items[index]
-    user_id = msg.from_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        cur = await db.execute("SELECT balance, inventory FROM users WHERE user_id = ?", (user_id,))
-        bal, inv = await cur.fetchone()
-        if bal < price:
-            await msg.answer("❌ Недостаточно монет.")
-            return
-        new_inv = inv + f"{item_name}," if inv else f"{item_name},"
-        await db.execute("UPDATE users SET balance = balance - ?, inventory = ? WHERE user_id = ?", (price, new_inv, user_id))
-        await db.commit()
-        await msg.answer(f"✅ Покупка успешна: {item_name}")
-
-@dp.message_handler(commands=["inventory"])
-async def inventory(msg: types.Message):
-    user_id = msg.from_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        cur = await db.execute("SELECT inventory FROM users WHERE user_id = ?", (user_id,))
-        row = await cur.fetchone()
-        if not row or not row[0]:
-            await msg.answer("🎒 У тебя пока ничего нет.")
-        else:
-            inv = row[0].split(",")[:-1]
-            await msg.answer("🎒 Твой инвентарь:\n" + "\n".join(f"- {x}" for x in inv))
-
-@dp.message_handler(commands=["vip"])
-async def vip(msg: types.Message):
-    user_id = msg.from_user.id
-    cost = 200000
-    async with aiosqlite.connect(DB_NAME) as db:
-        cur = await db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-        bal = (await cur.fetchone())[0]
-        if bal < cost:
-            await msg.answer("❌ Недостаточно монет для покупки VIP.")
-        else:
-            await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (cost, user_id))
             await db.commit()
-            await msg.answer("🎉 Поздравляем! Ты стал VIP!")
-
-@dp.message_handler(commands=["mod"])
-async def mod(msg: types.Message):
-    user_id = msg.from_user.id
-    cost = 10000000
-    async with aiosqlite.connect(DB_NAME) as db:
-        cur = await db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-        bal = (await cur.fetchone())[0]
-        if bal < cost:
-            await msg.answer("❌ Недостаточно монет для покупки модера.")
+            text = "Вы выиграли 1000 монет!" if win else "Вы проиграли 100 монет."
+            await msg.answer(text)
         else:
-            await db.execute("UPDATE users SET balance = balance - ? WHERE user_id = ?", (cost, user_id))
-            await db.commit()
-            await msg.answer("🛡 Теперь ты модератор!")
+            await msg.answer("У вас недостаточно монет (нужно минимум 100).")
+
+# --- Запуск ---
+async def main():
+    await init_db()
+    await dp.start_polling()
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.get_event_loop().run_until_complete(init_db())
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
 
 
