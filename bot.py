@@ -93,8 +93,7 @@ async def set_job(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "shop")
 async def show_shop(callback: types.CallbackQuery):
-    text = "🛒 <b>Магазин предметов</b>
-"
+    text = "🛒 <b>Магазин предметов</b>"
     for i, item in enumerate(shop_items[:30]):
         text += f"
 {i+1}. {item['name']} — 💰{item['price']} | 📈 +{item['income']}/ч"
@@ -107,11 +106,9 @@ async def show_inventory(callback: types.CallbackQuery):
     if not inventory:
         await callback.message.edit_text("🎒 Ваш инвентарь пуст.")
         return
-    text = "🎒 <b>Ваш инвентарь:</b>
-"
+    text = "🎒 <b>Ваш инвентарь:</b>"
     for item in inventory:
-        text += f"- {item['name']} (+{item['income']}/ч)
-"
+        text += f"- {item['name']} (+{item['income']}/ч)"
     await callback.message.edit_text(text)
 
 @dp.callback_query(F.data == "casino")
