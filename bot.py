@@ -8,9 +8,9 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import random
 
-API_TOKEN = "YOUR_API_TOKEN_HERE"
+API_TOKEN = "7558760680:AAHhhuACxlLgfkOwskeA5B9dzZ4GZp2uk8c"
 CHANNEL_USERNAME = "@economicbotlive"
-ADMINS = ["admin_username"]
+ADMINS = ["@noaulish"]
 
 bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher(storage=MemoryStorage())
